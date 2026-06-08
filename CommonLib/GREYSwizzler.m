@@ -174,40 +174,39 @@ static NSString *const gGREYSwizzlerException = @"gGREYSwizzlerException";
 }
 
 - (BOOL)swizzleClass:(Class)klass
-    replaceClassMethod:(SEL)methodSelector1
-            withMethod:(SEL)methodSelector2 {
-  if (!klass || !methodSelector1 || !methodSelector2) {
+               addInstanceMethod:(SEL)addSelector
+              withImplementation:(IMP)addIMP
+    andReplaceWithInstanceMethod:(SEL)instanceSelector {
+  if (!klass || !addSelector || !addIMP || !instanceSelector) {
     GREYLog(@"Nil Parameter(s) found when swizzling.");
     return NO;
   }
 
-  Method method1 = class_getClassMethod(klass, methodSelector1);
-  Method method2 = class_getClassMethod(klass, methodSelector2);
-  // Only swizzle if both methods are found.
-  if (method1 && method2) {
-    // Save the current implementations
-    IMP imp1 = method_getImplementation(method1);
-    IMP imp2 = method_getImplementation(method2);
-    [self grey_saveOriginalMethod:method1
-                   implementation:imp1
-                    originalClass:klass
-                   swizzledMethod:method2
-                      swizzledIMP:imp2
-                    swizzledClass:klass
-                       methodType:GREYMethodTypeClass];
+  // Check for whether an implementation forwards to a nil selector or not.
+  // This is caused when you use the incorrect methodForSelector call in order
+  // to get the implementation for a selector.
+  void *messageForwardingIMP = dlsym(RTLD_DEFAULT, "_objc_msgForward");
+  if (addIMP == messageForwardingIMP) {
+    GREYLog(@"Wrong Type of Implementation obtained for selector %@", NSStringFromClass(klass));
+    return NO;
+  }
 
-    // To add a class method, we need to get the class meta first.
-    // http://stackoverflow.com/questions/9377840/how-to-dynamically-add-a-class-method
-    Class classMeta = object_getClass(klass);
-    if (class_addMethod(classMeta, methodSelector1, imp2, method_getTypeEncoding(method2))) {
-      class_replaceMethod(classMeta, methodSelector2, imp1, method_getTypeEncoding(method1));
-    } else {
-      method_exchangeImplementations(method1, method2);
+  Method instanceMethod = class_getInstanceMethod(klass, instanceSelector);
+  if (instanceMethod) {
+    const char *types = method_getTypeEncoding(instanceMethod);
+    if (!types) {
+      GREYLog(@"Failed to get method type encoding.");
+      return NO;
     }
 
-    return YES;
+    if (!class_addMethod(klass, addSelector, addIMP, types)) {
+      GREYLog(@"Failed to add class method.");
+      return NO;
+    }
+    return [self swizzleClass:klass replaceInstanceMethod:instanceSelector withMethod:addSelector];
   } else {
-    GREYLog(@"Swizzling Method(s) not found while swizzling class %@.", NSStringFromClass(klass));
+    GREYLog(@"Instance method: %@ does not exist in the class %@.",
+            NSStringFromSelector(instanceSelector), NSStringFromClass(klass));
     return NO;
   }
 }
